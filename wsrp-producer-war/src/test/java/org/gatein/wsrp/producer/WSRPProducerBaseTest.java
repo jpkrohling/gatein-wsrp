@@ -445,13 +445,12 @@ public abstract class WSRPProducerBaseTest extends TestCase
    @OverProtocol("Servlet 2.5")
    public static WebArchive createGooglePortletArchive()
    {
-      //NOTE: the order in how this is configured matters. Since arquillian cannot handle overwriting files we need to specify the MANIFEST in a dummy war first, and
-      //      then merge in the actual war
       WebArchive webArchive = ShrinkWrap.create(WebArchive.class, "google-portlet.war");
-      webArchive.setManifest(new File("src/test/test-portlets/google-portlet-war/META-INF/MANIFEST.MF"));
 
       WebArchive googlePortletArchive = ShrinkWrap.createFromZipFile(WebArchive.class, new File("target/test-archives/google-portlet.war"));
       webArchive.merge(googlePortletArchive);
+
+      webArchive.setManifest(new File("src/test/test-portlets/google-portlet-war/META-INF/MANIFEST.MF"));
 
       return webArchive;
 

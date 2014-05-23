@@ -52,9 +52,19 @@ public class GTNSubjectCreatingInterceptor extends SubjectCreatingInterceptor
 
    private static final String USERNAME_TOKEN_IFAVAILABLE = "gtn.UsernameToken.ifAvailable";
 
-   protected boolean gtnUsernameTokenIfAvailable = false;
+   /*
+    * This property is set by the configuration file, meaning that its value is not changed during the lifecycle of
+    * an instance of this class. So, it's initialized only on the constructor, and it's not supposed to be changed
+    * afterwards. Be aware that this interceptor is accessed concurrently from different threads, so, it's not a good
+    * idea to change the state once this has been instantiated.
+    */
+   private boolean gtnUsernameTokenIfAvailable;
 
-   private WSUsernameTokenPrincipal wsUsernameTokenPrincipal = null;
+   /*
+    * Each thread represents a request, so, we store the WS principal on a ThreadLocal, so that we don't mix up
+    * the principals.
+    */
+   private ThreadLocal<WSUsernameTokenPrincipal> wsUsernameTokenPrincipalHolder = new ThreadLocal<WSUsernameTokenPrincipal>();
 
    public GTNSubjectCreatingInterceptor()
    {
@@ -64,40 +74,36 @@ public class GTNSubjectCreatingInterceptor extends SubjectCreatingInterceptor
    public GTNSubjectCreatingInterceptor(Map<String, Object> properties)
    {
       super(properties);
+      String action = (String) properties.get(WSHandlerConstants.ACTION);
+      if (null != action && action.contains(USERNAME_TOKEN_IFAVAILABLE))
+      {
+         gtnUsernameTokenIfAvailable = true;
+         String newAction = action.replace(USERNAME_TOKEN_IFAVAILABLE, WSHandlerConstants.USERNAME_TOKEN);
+         this.setProperty(WSHandlerConstants.ACTION, newAction);
+      }
    }
 
    @Override
    public void handleMessage(SoapMessage msg) throws Fault
    {
-      String actionProperty = (String)this.getProperties().get(WSHandlerConstants.ACTION);
-      if (actionProperty.contains(USERNAME_TOKEN_IFAVAILABLE))
-      {
-         gtnUsernameTokenIfAvailable = true;
-         this.setProperty(WSHandlerConstants.ACTION, actionProperty.replace(USERNAME_TOKEN_IFAVAILABLE, WSHandlerConstants.USERNAME_TOKEN));
-      }
-
-      try
-      {
-         //handle the message here which will create the SecurityContext containing the username and password
-         super.handleMessage(msg);
-      }
-      finally
-      {
-         //Replace the action property with the original property after the parent has handled the message
-         //Note: needed since on the next invocation, the user may have logged out but the action property will  have already been set as "UsernameToken" and the above checks will not be performed.
-         if (gtnUsernameTokenIfAvailable)
-         {
-            this.setProperty(WSHandlerConstants.ACTION, actionProperty);
-         }
-      }
+      super.handleMessage(msg);
 
       HttpServletRequest request = (HttpServletRequest)msg.get("HTTP.REQUEST");
+      WSUsernameTokenPrincipal wsUsernameTokenPrincipal = wsUsernameTokenPrincipalHolder.get();
       if (wsUsernameTokenPrincipal != null)
       {
          String username = wsUsernameTokenPrincipal.getName();
          String password = wsUsernameTokenPrincipal.getPassword();
 
-         wsUsernameTokenPrincipal = null;
+         if (null != request.getRemoteUser() && !username.equals(request.getRemoteUser()))
+         {
+            // this should never happen, but we need to be extra careful here
+            String errorMessage = "User on the request ("+request.getRemoteUser()+") was DIFFERENT than the one in evaluated by the Web Service ("+username+")";
+            log.error("WARNING: " + errorMessage);
+            throw new IllegalStateException(errorMessage);
+         }
+
+         wsUsernameTokenPrincipalHolder.set(null);
          try
          {
             //only perform a login if the user is not already authenticated
@@ -172,7 +178,7 @@ public class GTNSubjectCreatingInterceptor extends SubjectCreatingInterceptor
       // if the action contains gtn.UsernameToken.ifAvailable then we need to override how this method works
       // so that we don't run into an error that the actions are mismatched. Otherwise the method will fail
       // if we have a username token in the soap message but didn't specify it, or the other way around.
-      wsUsernameTokenPrincipal = null;
+      wsUsernameTokenPrincipalHolder.set(null);
       if (gtnUsernameTokenIfAvailable)
       {
          boolean foundUsernameTokenResult = false;
@@ -190,7 +196,7 @@ public class GTNSubjectCreatingInterceptor extends SubjectCreatingInterceptor
                Object principal = wsResult.get(WSSecurityEngineResult.TAG_PRINCIPAL);
                if (principal != null && principal instanceof WSUsernameTokenPrincipal)
                {
-                  this.wsUsernameTokenPrincipal = (WSUsernameTokenPrincipal)principal;
+                  this.wsUsernameTokenPrincipalHolder.set((WSUsernameTokenPrincipal)principal);
                }
 
                break;
